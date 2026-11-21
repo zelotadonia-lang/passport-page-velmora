@@ -1,34 +1,59 @@
-// Passport-spread entry (Node 22, standard library only): the image is the
-// entry.png beside this file, and the program copies it to the output
-// directory as entry.png. The gate takes a whole PNG of at most 1 MiB
-// and 1024 by 1024 pixels, and the judge sees exactly the bytes copied.
+// Velmora passport spread — Node 22, no dependencies.
 //
-// Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
+// The artwork lives in entry.png next to this file. This program checks
+// that the PNG is whole and within the bounty limits, then places a copy
+// at <output>/entry.png, where <output> is /output inside the grading
+// container or MAKEFUN_OUTPUT_DIR when run by hand:
+//
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
+//
+// Nothing here draws anything: the picture is produced by draw_entry.py
+// (Pillow, run on the author's machine) and committed beside this file,
+// so the program stays small and needs no network and no extra packages.
 
-import { copyFileSync, readFileSync, statSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
-const src = new URL('./entry.png', import.meta.url);
+const MAX_BYTES = 1048576;
+const MAX_SIDE = 1024;
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
-// Validate the entry file before copying, so a bad image fails loudly
-// instead of reaching the grader as a valid-looking copy.
-const stat = statSync(src);
-if (stat.size > 1048576) {
-  throw new Error(`entry.png is ${stat.size} bytes, over the 1 MiB limit`);
+function die(message) {
+  throw new Error(`passport entry: ${message}`);
 }
-const bytes = readFileSync(src);
-const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-if (bytes.length < 33 || !bytes.subarray(0, 8).equals(PNG_MAGIC)) {
-  throw new Error('entry.png does not start with the 8-byte PNG magic');
+
+function readPng(path) {
+  const info = statSync(path);
+  if (info.size > MAX_BYTES) {
+    die(`entry.png is ${info.size} bytes, above the ${MAX_BYTES} byte cap`);
+  }
+  return readFileSync(path);
 }
-if (bytes.toString('latin1', 12, 16) !== 'IHDR') {
-  throw new Error('entry.png has no IHDR chunk where the PNG header belongs');
+
+function checkPng(bytes) {
+  if (bytes.length < 33) {
+    die('entry.png is too short to hold a PNG header');
+  }
+  for (let i = 0; i < PNG_SIGNATURE.length; i += 1) {
+    if (bytes[i] !== PNG_SIGNATURE[i]) {
+      die('entry.png does not begin with the PNG signature');
+    }
+  }
+  if (bytes.toString('latin1', 12, 16) !== 'IHDR') {
+    die('entry.png has no IHDR chunk in the expected place');
+  }
+  const width = bytes.readUInt32BE(16);
+  const height = bytes.readUInt32BE(20);
+  if (width !== MAX_SIDE || height !== MAX_SIDE) {
+    die(`entry.png is ${width}x${height}, expected ${MAX_SIDE}x${MAX_SIDE}`);
+  }
 }
-const width = bytes.readUInt32BE(16);
-const height = bytes.readUInt32BE(20);
-if (width > 1024 || height > 1024) {
-  throw new Error(`entry.png is ${width}x${height}, over the 1024x1024 limit`);
-}
-copyFileSync(src, join(outDir, 'entry.png'));
+
+const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+const here = new URL('./entry.png', import.meta.url);
+
+const png = readPng(here);
+checkPng(png);
+
+mkdirSync(outDir, { recursive: true });
+writeFileSync(join(outDir, 'entry.png'), png);
